@@ -25,6 +25,16 @@ if not file:
     st.info("Upload a standardized template to begin.")
     st.stop()
 
+with st.sidebar:
+    if st.button("Download sample template"):
+        import io, pandas as pd
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as xl:
+            pd.DataFrame([["Template v1.0"]]).to_excel(xl, sheet_name="Meta", index=False, header=False)
+            cols = ["PortfolioID","Date","AssetName","AssetClass","Region","Currency","MarketValue","Weight"]
+            pd.DataFrame(columns=cols).to_excel(xl, sheet_name="Positions", index=False)
+        st.download_button("Save template.xlsx", buf.getvalue(), "template.xlsx")
+
 # Parse + validate
 try:
     sheets = read_template(file)
@@ -93,6 +103,7 @@ st.download_button("Download report.xlsx", xlsx_bytes, file_name="portfolio_heal
 
 # PDF export skipped in Streamlit Cloud for faster build
 st.info("PDF export is disabled in this version to speed up deployment. Use Excel report instead.")
+
 
 
 
