@@ -3,6 +3,10 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
+pwd = st.sidebar.text_input("App password", type="password")
+if "APP_PASSWORD" in st.secrets and pwd != st.secrets["APP_PASSWORD"]:
+    st.stop()
+
 from processing.pipeline import read_template, validate_positions, transform
 from processing.reporting import build_report_xlsx, build_validation_report, build_pdf_from_html
 
@@ -86,5 +90,6 @@ st.download_button("Download report.xlsx", xlsx_bytes, file_name="portfolio_heal
 
 # PDF export skipped in Streamlit Cloud for faster build
 st.info("PDF export is disabled in this version to speed up deployment. Use Excel report instead.")
+
 
 
