@@ -1,15 +1,15 @@
 import pandas as pd
-import duckdb
 from .schema import PositionsSchema, BusinessRules
 
-def read_template(xls_bytes: bytes) -> dict[str, pd.DataFrame]:
-    with pd.ExcelFile(xls_bytes) as x:
+def read_template(xls_file) -> dict[str, pd.DataFrame]:
+    with pd.ExcelFile(xls_file) as x:
         sheets = {s: x.parse(s) for s in x.sheet_names}
-    # version check (expect a single-cell 'TemplateVersion' sheet or cell A1 on 'Meta')
-    if "Meta" in sheets:
-        tv = str(sheets["Meta"].iloc[0,0]).strip()
-        if not tv.startswith("Template v1"):
-            raise ValueError(f"Incompatible template version: {tv}")
+    # Tolerant version check: only enforce if Meta exists and has a value
+    tv = None
+    if "Meta" in sheets and not sheets["Meta"].empty:
+        tv = str(sheets["Meta"].iloc[0, 0]).strip()
+    if tv and not tv.startswith("Template v1"):
+        raise ValueError(f"Incompatible template version: {tv}")
     return sheets
 
 def validate_positions(df: pd.DataFrame) -> list[dict]:
@@ -54,3 +54,4 @@ def transform(df: pd.DataFrame) -> dict:
         "currency_exp": currency_exp,
         "metrics": metrics,
     }
+
