@@ -1,24 +1,19 @@
 import streamlit as st
+
+# FIRST Streamlit call — must be here and only once
+st.set_page_config(page_title="Portfolio Health Check", layout="wide")
+
+# Now safe to import everything else
 import pandas as pd
 import plotly.express as px
-
 from processing.pipeline import read_template, validate_positions, transform
 from processing.reporting import build_report_xlsx, build_validation_report
 
-# MUST be first Streamlit call
-st.set_page_config(page_title="Portfolio Health Check", layout="wide")
-
-# Optional auth (after set_page_config)
+# Optional password (after page_config)
 if "APP_PASSWORD" in st.secrets:
-    with st.sidebar:
-        pwd = st.text_input("App password", type="password")
+    pwd = st.sidebar.text_input("App password", type="password")
     if pwd != st.secrets["APP_PASSWORD"]:
         st.stop()
-
-from processing.pipeline import read_template, validate_positions, transform
-from processing.reporting import build_report_xlsx, build_validation_report, build_pdf_from_html
-
-st.set_page_config(page_title="Portfolio Health Check", layout="wide")
 
 st.title("Portfolio Health Check")
 
@@ -98,6 +93,7 @@ st.download_button("Download report.xlsx", xlsx_bytes, file_name="portfolio_heal
 
 # PDF export skipped in Streamlit Cloud for faster build
 st.info("PDF export is disabled in this version to speed up deployment. Use Excel report instead.")
+
 
 
 
