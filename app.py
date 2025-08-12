@@ -84,13 +84,7 @@ st.subheader("Artifacts")
 xlsx_bytes = build_report_xlsx(results)
 st.download_button("Download report.xlsx", xlsx_bytes, file_name="portfolio_health_report.xlsx")
 
-pdf_html = f"""
-<h1>Portfolio Health Summary</h1>
-<p><strong>Gross Exposure:</strong> {results['metrics']['gross_exposure']:.2f}</p>
-<p><strong>Positions:</strong> {results['metrics']['n_positions']}</p>
-"""
-try:
-    pdf_bytes = build_pdf_from_html(pdf_html)
-    st.download_button("Download summary.pdf", pdf_bytes, file_name="summary.pdf")
-except Exception as e:
-    st.warning(f"PDF build skipped (server lacks WeasyPrint deps): {e}")
+# PDF export skipped in Streamlit Cloud for faster build
+st.info("PDF export is disabled in this version to speed up deployment. Use Excel report instead.")
+
+
