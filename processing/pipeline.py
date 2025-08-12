@@ -1,4 +1,5 @@
 import pandas as pd
+import duckdb
 from .schema import PositionsSchema, BusinessRules
 
 def read_template(xls_file) -> dict[str, pd.DataFrame]:
@@ -76,5 +77,6 @@ def transform(df: pd.DataFrame) -> dict:
         "currency_exp": currency_exp,
         "metrics": metrics,
     }
+
 
 
