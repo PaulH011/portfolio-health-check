@@ -45,10 +45,24 @@ tmpl_type = st.sidebar.selectbox(
 )
 
 sheet_name = get_required_sheet_for_type(tmpl_type)
-df = sheets.get(sheet_name) or next((sheets[k] for k in sheets if k.lower() == sheet_name.lower()), None)
+
+# safe fetch: no boolean ops on DataFrames
+df = sheets.get(sheet_name)
+
+# case-insensitive fallback + allow 'Pastor' for PortfolioMaster
+if df is None:
+    for k, v in sheets.items():
+        if k.lower() == sheet_name.lower():
+            df = v
+            break
+        if tmpl_type == "PortfolioMaster" and k.lower() == "pastor":
+            df = v
+            break
+
 if df is None or df.empty:
     st.error(f"Missing or empty sheet: '{sheet_name}'.")
     st.stop()
+
 
 # --- Validate
 errors = validate_df(df, tmpl_type)
@@ -133,3 +147,4 @@ elif tmpl_type == "FixedIncomeAssetList":
 # --- Artifacts
 xlsx_bytes = build_report_xlsx(results)
 st.download_button("Download report.xlsx", xlsx_bytes, file_name="portfolio_health_report.xlsx")
+
