@@ -46,13 +46,13 @@ tmpl_options = ["PortfolioMaster", "EquityAssetList", "FixedIncomeAssetList"]
 with st.sidebar:
     tmpl_type = st.selectbox("Template type", options=tmpl_options, index=tmpl_options.index(detected_type))
 
-# ---------------- Safe sheet fetch (fix for boolean-eval bug) ----------------
+# ---------------- Safe sheet fetch (no boolean-eval on DataFrames) ----------------
 sheet_name = get_required_sheet_for_type(tmpl_type)
 
-# 1) exact name
+# 1) exact match
 df = sheets.get(sheet_name)
 
-# 2) case-insensitive fallback, and accept 'Pastor' for PortfolioMaster
+# 2) case-insensitive + allow 'Pastor' alias for PortfolioMaster
 if df is None:
     for k, v in sheets.items():
         kl = k.lower()
@@ -63,9 +63,17 @@ if df is None:
             df = v
             break
 
-if df is None or df.empty:
-    st.error(f"Missing or empty sheet: '{sheet_name}'.")
+# hard-missing sheet -> stop
+if df is None:
+    st.error(f"Missing required sheet: '{sheet_name}'.")
     st.stop()
+
+# allow empty sheet (blank template) but stop gracefully
+if df.shape[0] == 0:
+    st.warning(f"Sheet '{sheet_name}' is present but has 0 rows. "
+               "Download the sample template, add rows, and re-upload.")
+    st.stop()
+
 
 # ---------------- Validation ----------------
 errors = validate_df(df, tmpl_type)
@@ -179,3 +187,4 @@ elif tmpl_type == "FixedIncomeAssetList":
 # ---------------- Report export ----------------
 xlsx_bytes = build_report_xlsx(results)
 st.download_button("Download report.xlsx", xlsx_bytes, file_name="portfolio_health_report.xlsx")
+
