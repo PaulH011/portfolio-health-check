@@ -1,3 +1,4 @@
+# top of processing/pipeline.py
 import pandas as pd
 from .schema import (
     PortfolioMasterSchema,
@@ -189,4 +190,5 @@ def transform_results(df: pd.DataFrame, tmpl_type: str) -> dict:
 
     # fallback
     return {"template_type": tmpl_type, "metrics": {"n_rows": int(df.shape[0])}}
+
 
