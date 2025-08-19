@@ -110,21 +110,23 @@ if tmpl_type == "PortfolioMaster":
         st.markdown("**Top assets**")
         st.dataframe(results["top_assets"])
 
-    with tab2:
+    # --- By Asset Class (donut pie) ---
+with tab2:
     dfv = results["by_asset_class"].copy()
     total = dfv["USD Total"].sum()
     dfv["% of Total"] = (dfv["USD Total"] / total) * 100
 
     label_mode = st.radio(
-        "Labels", ["Value ($)", "% of total", "Both"], index=2, horizontal=True, key="pm_assetclass_labels"
+        "Labels", ["Value ($)", "% of total", "Both"],
+        index=2, horizontal=True, key="pm_assetclass_labels"
     )
 
-    import plotly.express as px
     fig = px.pie(
         dfv,
         names="Asset Class",
         values="USD Total",
-        hole=0.25,  # donut
+        hole=0.25,
+        title="By Asset Class"
     )
     if label_mode == "Value ($)":
         fig.update_traces(textinfo="label+value")
@@ -136,6 +138,7 @@ if tmpl_type == "PortfolioMaster":
     st.plotly_chart(fig, use_container_width=True)
 
     st.dataframe(dfv[["Asset Class", "USD Total", "% of Total"]])
+
 
 
     with tab3:
@@ -209,4 +212,5 @@ elif tmpl_type == "FixedIncomeAssetList":
 # ---------------- Report export ----------------
 xlsx_bytes = build_report_xlsx(results)
 st.download_button("Download report.xlsx", xlsx_bytes, file_name="portfolio_health_report.xlsx")
+
 
