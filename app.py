@@ -1,15 +1,20 @@
 import streamlit as st
 
-# FIRST Streamlit call — must be here and only once
+# FIRST Streamlit call — only once
 st.set_page_config(page_title="Portfolio Health Check", layout="wide")
 
-# Now safe to import everything else
 import pandas as pd
 import plotly.express as px
-from processing.pipeline import read_template, validate_positions, transform
+from processing.pipeline import (
+    read_workbook,
+    detect_template_type,
+    get_required_sheet_for_type,
+    validate_df,
+    transform_results,
+)
 from processing.reporting import build_report_xlsx, build_validation_report
 
-# Optional password (after page_config)
+# (Optional) simple password — remove this block if you don't want it
 if "APP_PASSWORD" in st.secrets:
     pwd = st.sidebar.text_input("App password", type="password")
     if pwd != st.secrets["APP_PASSWORD"]:
@@ -25,87 +30,106 @@ if not file:
     st.info("Upload a standardized template to begin.")
     st.stop()
 
-with st.sidebar:
-    if st.button("Download sample template"):
-        import io, pandas as pd
-        buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine="openpyxl") as xl:
-            pd.DataFrame([["Template v1.0"]]).to_excel(xl, sheet_name="Meta", index=False, header=False)
-            cols = ["PortfolioID","Date","AssetName","AssetClass","Region","Currency","MarketValue","Weight"]
-            pd.DataFrame(columns=cols).to_excel(xl, sheet_name="Positions", index=False)
-        st.download_button("Save template.xlsx", buf.getvalue(), "template.xlsx")
-
-# Parse + validate
+# --- Read workbook & detect type
 try:
-    sheets = read_template(file)
-    # Expect "Positions" sheet — adapt name if different
-    pos = sheets.get("Positions")
-    if pos is None:
-        st.error("Missing required sheet: 'Positions'")
-        st.stop()
-    # normalize column names
-    pos.columns = [c.strip() for c in pos.columns]
+    sheets, meta_str = read_workbook(file)
 except Exception as e:
     st.error(f"Template read failed: {e}")
     st.stop()
 
-errors = validate_positions(pos)
+detected_type = detect_template_type(sheets, meta_str)
+tmpl_type = st.sidebar.selectbox(
+    "Template type",
+    options=["PortfolioMaster", "EquityAssetList", "FixedIncomeAssetList"],
+    index=["PortfolioMaster", "EquityAssetList", "FixedIncomeAssetList"].index(detected_type)
+)
 
-col_a, col_b = st.columns([2,1])
-with col_a:
+sheet_name = get_required_sheet_for_type(tmpl_type)
+df = sheets.get(sheet_name) or next((sheets[k] for k in sheets if k.lower() == sheet_name.lower()), None)
+if df is None or df.empty:
+    st.error(f"Missing or empty sheet: '{sheet_name}'.")
+    st.stop()
+
+# --- Validate
+errors = validate_df(df, tmpl_type)
+c1, c2 = st.columns([2,1])
+with c1:
     st.subheader("Validation")
     if errors:
         st.error(f"{len(errors)} validation issue(s) found")
         st.dataframe(pd.DataFrame(errors))
     else:
         st.success("Validation passed")
-
-with col_b:
-    if st.button("Download Validation Report"):
-        vb = build_validation_report(errors)
-        st.download_button("Save validation.xlsx", vb, file_name="validation_report.xlsx")
+with c2:
+    vb = build_validation_report(errors)
+    st.download_button("Download Validation Report", vb, file_name="validation_report.xlsx")
 
 if errors:
     st.stop()
 
-# Transform & show dashboards
-results = transform(pos)
+# --- Transform & Dashboards
+results = transform_results(df, tmpl_type)
+st.caption(f"Detected: **{detected_type}**  •  Validating/processing as: **{tmpl_type}**  •  Source sheet: **{sheet_name}**")
 
-tab1, tab2, tab3, tab4 = st.tabs(["Summary","By Asset Class","By Region","Currency"])
+if tmpl_type == "PortfolioMaster":
+    tab1, tab2, tab3, tab4 = st.tabs(["Summary", "By Asset Class", "By Sub-Asset", "Currency / Liquidity"])
+    with tab1:
+        m = results["metrics"]
+        st.metric("Rows", m["n_rows"])
+        st.metric("Total USD", f'{m["usd_total_sum"]:,.2f}')
+        st.dataframe(results["top_assets"])
+    with tab2:
+        dfv = results["by_asset_class"]
+        fig = px.bar(dfv, x="Asset Class", y="USD Total", text="USD Total")
+        st.plotly_chart(fig, use_container_width=True); st.dataframe(dfv)
+    with tab3:
+        dfv = results["by_sub_asset"]
+        fig = px.bar(dfv, x="Sub Asset Class", y="USD Total", text="USD Total")
+        st.plotly_chart(fig, use_container_width=True); st.dataframe(dfv)
+    with tab4:
+        lc = results["by_liquidity"]; fx = results["by_fx"]
+        st.markdown("**Liquidity**"); st.dataframe(lc)
+        st.markdown("**Currency**"); st.dataframe(fx)
 
-with tab1:
-    m = results["metrics"]
-    st.metric("Gross Exposure (sum weights)", f'{m["gross_exposure"]:.2f}')
-    st.metric("Positions", m["n_positions"])
+elif tmpl_type == "EquityAssetList":
+    tab1, tab2, tab3, tab4 = st.tabs(["Summary", "By Sector", "By Region", "Top Positions"])
+    with tab1:
+        m = results["metrics"]
+        st.metric("Positions", m["n_rows"])
+        st.metric("Market Value (USD)", f'{m["mv_sum"]:,.2f}')
+        st.metric("Weight % (sum)", f'{m["w_sum"]:.2f}')
+    with tab2:
+        dfv = results["by_sector"]
+        fig = px.bar(dfv, x="Sector (GICS)", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True); st.dataframe(dfv)
+    with tab3:
+        dfv = results["by_region"]
+        fig = px.bar(dfv, x="Region", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True); st.dataframe(dfv)
+    with tab4:
+        st.dataframe(results["top_positions"])
 
-with tab2:
-    df = results["alloc_asset"]
-    fig = px.bar(df, x="AssetClass", y="Weight", text="Weight")
-    st.plotly_chart(fig, use_container_width=True)
-    st.dataframe(df)
+elif tmpl_type == "FixedIncomeAssetList":
+    tab1, tab2, tab3, tab4 = st.tabs(["Summary", "By Rating", "Maturity Ladder", "Duration Buckets"])
+    with tab1:
+        m = results["metrics"]
+        st.metric("Bonds", m["n_rows"])
+        st.metric("Market Value (USD)", f'{m["mv_sum"]:,.2f}')
+        st.metric("Weight % (sum)", f'{m["w_sum"]:.2f}')
+        st.metric("Mod. Duration (mv-weighted)", f'{m["dur_wt_avg"]:.2f}')
+    with tab2:
+        dfv = results["by_rating"]
+        fig = px.bar(dfv, x="Rating", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True); st.dataframe(dfv)
+    with tab3:
+        dfv = results["maturity_buckets"]
+        fig = px.bar(dfv, x="Bucket", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True); st.dataframe(dfv)
+    with tab4:
+        dfv = results["duration_buckets"]
+        fig = px.bar(dfv, x="Bucket", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True); st.dataframe(dfv)
 
-with tab3:
-    df = results["alloc_region"]
-    fig = px.bar(df, x="Region", y="Weight", text="Weight")
-    st.plotly_chart(fig, use_container_width=True)
-    st.dataframe(df)
-
-with tab4:
-    df = results["currency_exp"]
-    fig = px.bar(df, x="Currency", y="Weight", text="Weight")
-    st.plotly_chart(fig, use_container_width=True)
-    st.dataframe(df)
-
-# Artifacts
-st.subheader("Artifacts")
+# --- Artifacts
 xlsx_bytes = build_report_xlsx(results)
 st.download_button("Download report.xlsx", xlsx_bytes, file_name="portfolio_health_report.xlsx")
-
-# PDF export skipped in Streamlit Cloud for faster build
-st.info("PDF export is disabled in this version to speed up deployment. Use Excel report instead.")
-
-
-
-
-
-
