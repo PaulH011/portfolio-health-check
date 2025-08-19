@@ -139,10 +139,32 @@ if tmpl_type == "PortfolioMaster":
         st.dataframe(dfv[["Asset Class", "USD Total", "% of Total"]])
 
     with tab3:
-        dfv = results["by_sub_asset"]
-        fig = px.bar(dfv, x="Sub Asset Class", y="USD Total", text="USD Total")
+        dfv = results["by_sub_asset"].copy()
+        total = dfv["USD Total"].sum()
+        dfv["% of Total"] = (dfv["USD Total"] / total) * 100
+    
+        label_mode = st.radio(
+            "Labels", ["Value ($)", "% of total", "Both"],
+            index=2, horizontal=True, key="pm_subasset_labels"
+        )
+    
+        fig = px.pie(
+            dfv,
+            names="Sub Asset Class",
+            values="USD Total",
+            hole=0.25,
+            title="By Sub-Asset"
+        )
+        if label_mode == "Value ($)":
+            fig.update_traces(textinfo="label+value")
+        elif label_mode == "% of total":
+            fig.update_traces(textinfo="label+percent")
+        else:
+            fig.update_traces(textinfo="label+value+percent")
+        fig.update_traces(textposition="inside")
         st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(dfv)
+    
+        st.dataframe(dfv[["Sub Asset Class", "USD Total", "% of Total"]])
 
     with tab4:
         st.markdown("**Liquidity**")
@@ -209,4 +231,5 @@ elif tmpl_type == "FixedIncomeAssetList":
 # ---------------- Report export ----------------
 xlsx_bytes = build_report_xlsx(results)
 st.download_button("Download report.xlsx", xlsx_bytes, file_name="portfolio_health_report.xlsx")
+
 
