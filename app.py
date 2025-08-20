@@ -6,6 +6,23 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
+import plotly.io as pio
+import plotly.graph_objects as go
+
+pio.templates["parkview"] = go.layout.Template(
+    layout=go.Layout(
+        font=dict(family="Inter, Segoe UI, Arial, sans-serif", size=13),
+        colorway=["#1F3B63", "#7DA2C8", "#4CB944", "#F5A623", "#D64550", "#A06CD5"],
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        hoverlabel=dict(bgcolor="white", font_size=12),
+        legend=dict(borderwidth=0, orientation="h", x=0, y=1.08),
+        margin=dict(l=10, r=10, t=40, b=10),
+    )
+)
+pio.templates.default = "parkview"
+
+
 from processing.pipeline import (
     read_workbook,
     detect_template_type,
@@ -357,3 +374,4 @@ st.download_button(
     "Download PDF report", pdf_bytes,
     file_name="portfolio_health_report.pdf", mime="application/pdf"
 )
+
