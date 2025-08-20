@@ -1,129 +1,233 @@
-# plot.py
-"""
-Plot helpers for the Portfolio Health Check app.
-- Centralizes pie/donut builders and formatting.
-- Pie helpers return (fig, table_with_%_of_total) so you can also show a table.
-"""
+import streamlit as st
 
-from typing import Optional, Tuple
+# ---- MUST be the first Streamlit call (and only once) ----
+st.set_page_config(page_title="Portfolio Health Check", layout="wide")
+
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 
-# ---------------- Formatting helpers (call after creating a fig) ----------------
-
-def _apply_common_layout(fig: go.Figure) -> go.Figure:
-    # Legend BELOW the plot, horizontal, left aligned
-    fig.update_layout(
-        legend=dict(
-            orientation="h",
-            y=-0.18,              # below the plot area
-            x=0.0,
-            xanchor="left",
-            yanchor="top",
-            title_text=""
-        ),
-        # Leave headroom for title; extra bottom for legend
-        margin=dict(l=8, r=8, t=50, b=80),
-        paper_bgcolor="white",
-        plot_bgcolor="white",
-    )
-    return fig
-
-def format_pie(fig: go.Figure) -> go.Figure:
-    fig.update_traces(
-        textposition="inside",
-        textfont=dict(size=12),
-        hovertemplate="%{label}<br>%{percent:.1%} (%{value:,.0f})<extra></extra>",
-    )
-    return _apply_common_layout(fig)
-
-def format_bar(fig: go.Figure) -> go.Figure:
-    fig.update_traces(
-        texttemplate="%{y:,.0f}",
-        hovertemplate="%{x}<br>%{y:,.2f}<extra></extra>",
-    )
-    fig.update_yaxes(tickformat=",.0f", gridcolor="#E9EEF4")
-    fig.update_xaxes(gridcolor="#F4F7FA")
-    return _apply_common_layout(fig)
-
-def format_waterfall(fig: go.Figure) -> go.Figure:
-    fig.update_yaxes(tickformat=",.0f", gridcolor="#E9EEF4")
-    fig.update_xaxes(gridcolor="#F4F7FA")
-    return _apply_common_layout(fig)
+from processing.pipeline import (
+    read_workbook,
+    detect_template_type,
+    get_required_sheet_for_type,
+    validate_df,
+    transform_results,
+)
+from processing.reporting import build_report_xlsx, build_validation_report
 
 
-# ---------------- Core pie/donut builder ----------------
-
-_LABEL_TEXTINFO = {
-    "value": "label+value",
-    "%": "label+percent",
-    "both": "label+value+percent",
-}
-
-def _add_pct_of_total(df: pd.DataFrame, value_col: str) -> pd.DataFrame:
-    out = df.copy()
-    total = pd.to_numeric(out[value_col], errors="coerce").fillna(0.0).sum()
-    out["% of Total"] = 0.0 if total == 0 else (out[value_col] / total * 100.0)
-    return out
-
-def pie_donut(
-    df: pd.DataFrame,
-    names_col: str,
-    values_col: str,
-    *,
-    label_mode: str = "both",   # "value" | "%" | "both"
-    title: Optional[str] = None,
-    hole: float = 0.25,
-    sort_desc: bool = True,
-) -> Tuple[go.Figure, pd.DataFrame]:
-    """
-    Generic donut pie. Returns (figure, table_with_%_of_total).
-    """
-    work = df[[names_col, values_col]].copy()
-    work[values_col] = pd.to_numeric(work[values_col], errors="coerce").fillna(0.0)
-    if sort_desc:
-        work = work.sort_values(values_col, ascending=False)
-
-    fig = px.pie(
-        work,
-        names=names_col,
-        values=values_col,
-        hole=hole,
-        title=title,
-    )
-    # Left-align title so it doesn't sit under centered legend
-    fig.update_layout(
-        title=dict(y=0.98, x=0.0, xanchor="left", yanchor="top", font=dict(size=16))
-    )
-    fig.update_traces(textinfo=_LABEL_TEXTINFO.get(label_mode, "label+value+percent"))
-    format_pie(fig)
-
-    table = _add_pct_of_total(work, values_col)
-    return fig, table
+# ---- (Optional) simple password. Delete this block to disable. ----
+if "APP_PASSWORD" in st.secrets:
+    pwd = st.sidebar.text_input("App password", type="password")
+    if pwd != st.secrets["APP_PASSWORD"]:
+        st.stop()
 
 
-# ---------------- Convenience wrappers used by app.py ----------------
+st.title("Portfolio Health Check")
 
-# PortfolioMaster
-def pie_asset_class(results: dict, label_mode: str = "both") -> Tuple[go.Figure, pd.DataFrame]:
-    df = results["by_asset_class"].rename(columns={"USD Total": "Value"})
-    return pie_donut(df, "Asset Class", "Value", label_mode=label_mode, title="By Asset Class")
+# ---------------- Sidebar: upload + template switcher ----------------
+with st.sidebar:
+    st.header("Upload")
+    file = st.file_uploader("Upload standardized Excel (.xlsx)", type=["xlsx"], accept_multiple_files=False)
 
-def pie_sub_asset(results: dict, label_mode: str = "both") -> Tuple[go.Figure, pd.DataFrame]:
-    df = results["by_sub_asset"].rename(columns={"USD Total": "Value"})
-    return pie_donut(df, "Sub Asset Class", "Value", label_mode=label_mode, title="By Sub-Asset")
+if not file:
+    st.info("Upload a standardized template to begin.")
+    st.stop()
 
-# EquityAssetList
-def pie_equity_sector(results: dict, label_mode: str = "both") -> Tuple[go.Figure, pd.DataFrame]:
-    df = results["by_sector"].rename(columns={"Weight %": "Weight"})
-    return pie_donut(df, "Sector (GICS)", "Weight", label_mode=label_mode, title="Equity by Sector")
+# ---------------- Read workbook & detect template type ----------------
+try:
+    sheets, meta_str = read_workbook(file)  # dict[str, DataFrame], "Template v1.0 - XYZ" or None
+except Exception as e:
+    st.error(f"Template read failed: {e}")
+    st.stop()
 
-def pie_equity_region(results: dict, label_mode: str = "both") -> Tuple[go.Figure, pd.DataFrame]:
-    df = results["by_region"].rename(columns={"Weight %": "Weight"})
-    return pie_donut(df, "Region", "Weight", label_mode=label_mode, title="Equity by Region")
+detected_type = detect_template_type(sheets, meta_str)
+tmpl_options = ["PortfolioMaster", "EquityAssetList", "FixedIncomeAssetList"]
+with st.sidebar:
+    tmpl_type = st.selectbox("Template type", options=tmpl_options, index=tmpl_options.index(detected_type))
 
-# FixedIncomeAssetList
-def pie_fi_rating(results: dict, label_mode: str = "both") -> Tuple[go.Figure, pd.DataFrame]:
-    df = results["by_rating"].rename(columns={"Weight %": "Weight"})
-    return pie_donut(df, "Rating", "Weight", label_mode=label_mode, title="Fixed Income by Rating")
+# ---------------- Safe sheet fetch (no boolean-eval on DataFrames) ----------------
+sheet_name = get_required_sheet_for_type(tmpl_type)
+
+# 1) exact match
+df = sheets.get(sheet_name)
+
+# 2) case-insensitive + allow 'Pastor' alias for PortfolioMaster
+if df is None:
+    for k, v in sheets.items():
+        kl = k.lower()
+        if kl == sheet_name.lower():
+            df = v
+            break
+        if tmpl_type == "PortfolioMaster" and kl == "pastor":
+            df = v
+            break
+
+# hard-missing sheet -> stop
+if df is None:
+    st.error(f"Missing required sheet: '{sheet_name}'.")
+    st.stop()
+
+# allow empty sheet (blank template) but stop gracefully
+if df.shape[0] == 0:
+    st.warning(f"Sheet '{sheet_name}' is present but has 0 rows. "
+               "Download the sample template, add rows, and re-upload.")
+    st.stop()
+
+
+# ---------------- Validation ----------------
+errors = validate_df(df, tmpl_type)
+
+c1, c2 = st.columns([2, 1])
+with c1:
+    st.subheader("Validation")
+    if errors:
+        st.error(f"{len(errors)} validation issue(s) found")
+        st.dataframe(pd.DataFrame(errors))
+    else:
+        st.success("Validation passed")
+with c2:
+    vb = build_validation_report(errors)
+    st.download_button("Download Validation Report", vb, file_name="validation_report.xlsx")
+
+if errors:
+    st.stop()
+
+# ---------------- Transform & Dashboards ----------------
+results = transform_results(df, tmpl_type)
+st.caption(
+    f"Detected: **{detected_type}**  •  Processing as: **{tmpl_type}**  •  Source sheet: **{sheet_name}**"
+)
+
+if tmpl_type == "PortfolioMaster":
+    tab1, tab2, tab3, tab4 = st.tabs(["Summary", "By Asset Class", "By Sub-Asset", "Currency / Liquidity"])
+
+    with tab1:
+        m = results["metrics"]
+        cA, cB = st.columns(2)
+        cA.metric("Rows", m["n_rows"])
+        cB.metric("Total USD", f'{m["usd_total_sum"]:,.2f}')
+        st.markdown("**Top assets**")
+        st.dataframe(results["top_assets"])
+
+    with tab2:
+        dfv = results["by_asset_class"].copy()
+        total = dfv["USD Total"].sum()
+        dfv["% of Total"] = (dfv["USD Total"] / total) * 100
+    
+        label_mode = st.radio(
+            "Labels", ["Value ($)", "% of total", "Both"],
+            index=2, horizontal=True, key="pm_assetclass_labels"
+        )
+    
+        fig = px.pie(
+            dfv,
+            names="Asset Class",
+            values="USD Total",
+            hole=0.25,
+            title="By Asset Class"
+        )
+        if label_mode == "Value ($)":
+            fig.update_traces(textinfo="label+value")
+        elif label_mode == "% of total":
+            fig.update_traces(textinfo="label+percent")
+        else:
+            fig.update_traces(textinfo="label+value+percent")
+        fig.update_traces(textposition="inside")
+        st.plotly_chart(fig, use_container_width=True)
+    
+        st.dataframe(dfv[["Asset Class", "USD Total", "% of Total"]])
+
+    with tab3:
+        dfv = results["by_sub_asset"].copy()
+        total = dfv["USD Total"].sum()
+        dfv["% of Total"] = (dfv["USD Total"] / total) * 100
+    
+        label_mode = st.radio(
+            "Labels", ["Value ($)", "% of total", "Both"],
+            index=2, horizontal=True, key="pm_subasset_labels"
+        )
+    
+        fig = px.pie(
+            dfv,
+            names="Sub Asset Class",
+            values="USD Total",
+            hole=0.25,
+            title="By Sub-Asset"
+        )
+        if label_mode == "Value ($)":
+            fig.update_traces(textinfo="label+value")
+        elif label_mode == "% of total":
+            fig.update_traces(textinfo="label+percent")
+        else:
+            fig.update_traces(textinfo="label+value+percent")
+        fig.update_traces(textposition="inside")
+        st.plotly_chart(fig, use_container_width=True)
+    
+        st.dataframe(dfv[["Sub Asset Class", "USD Total", "% of Total"]])
+
+    with tab4:
+        st.markdown("**Liquidity**")
+        st.dataframe(results["by_liquidity"])
+        st.markdown("**Currency**")
+        st.dataframe(results["by_fx"])
+
+
+elif tmpl_type == "EquityAssetList":
+    tab1, tab2, tab3, tab4 = st.tabs(["Summary", "By Sector", "By Region", "Top Positions"])
+
+    with tab1:
+        m = results["metrics"]
+        cA, cB, cC = st.columns(3)
+        cA.metric("Positions", m["n_rows"])
+        cB.metric("Market Value (USD)", f'{m["mv_sum"]:,.2f}')
+        cC.metric("Weight % (sum)", f'{m["w_sum"]:.2f}')
+
+    with tab2:
+        dfv = results["by_sector"]
+        fig = px.bar(dfv, x="Sector (GICS)", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(dfv)
+
+    with tab3:
+        dfv = results["by_region"]
+        fig = px.bar(dfv, x="Region", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(dfv)
+
+    with tab4:
+        st.dataframe(results["top_positions"])
+
+
+elif tmpl_type == "FixedIncomeAssetList":
+    tab1, tab2, tab3, tab4 = st.tabs(["Summary", "By Rating", "Maturity Ladder", "Duration Buckets"])
+
+    with tab1:
+        m = results["metrics"]
+        cA, cB, cC, cD = st.columns(4)
+        cA.metric("Bonds", m["n_rows"])
+        cB.metric("Market Value (USD)", f'{m["mv_sum"]:,.2f}')
+        cC.metric("Weight % (sum)", f'{m["w_sum"]:.2f}')
+        cD.metric("Mod. Duration (mv-weighted)", f'{m["dur_wt_avg"]:.2f}')
+
+    with tab2:
+        dfv = results["by_rating"]
+        fig = px.bar(dfv, x="Rating", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(dfv)
+
+    with tab3:
+        dfv = results["maturity_buckets"]
+        fig = px.bar(dfv, x="Bucket", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(dfv)
+
+    with tab4:
+        dfv = results["duration_buckets"]
+        fig = px.bar(dfv, x="Bucket", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(dfv)
+
+# ---------------- Report export ----------------
+xlsx_bytes = build_report_xlsx(results)
+st.download_button("Download report.xlsx", xlsx_bytes, file_name="portfolio_health_report.xlsx")
