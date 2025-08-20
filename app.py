@@ -1,168 +1,233 @@
 import streamlit as st
+
+# ---- MUST be the first Streamlit call (and only once) ----
+st.set_page_config(page_title="Portfolio Health Check", layout="wide")
+
 import pandas as pd
 import plotly.express as px
 
 from processing.pipeline import (
     read_workbook,
     detect_template_type,
+    get_required_sheet_for_type,
     validate_df,
     transform_results,
-    transform_equity_results,
 )
-from processing.reporting import generate_excel_report
-from processing.pdf_report import generate_pdf_report
-from processing.schema import *
-from plot import format_pie
+from processing.reporting import build_report_xlsx, build_validation_report
 
-# -----------------------------
-# App Config
-# -----------------------------
-st.set_page_config(
-    page_title="Portfolio Health Check",
-    layout="wide",
-    initial_sidebar_state="expanded"
+
+# ---- (Optional) simple password. Delete this block to disable. ----
+if "APP_PASSWORD" in st.secrets:
+    pwd = st.sidebar.text_input("App password", type="password")
+    if pwd != st.secrets["APP_PASSWORD"]:
+        st.stop()
+
+
+st.title("Portfolio Health Check")
+
+# ---------------- Sidebar: upload + template switcher ----------------
+with st.sidebar:
+    st.header("Upload")
+    file = st.file_uploader("Upload standardized Excel (.xlsx)", type=["xlsx"], accept_multiple_files=False)
+
+if not file:
+    st.info("Upload a standardized template to begin.")
+    st.stop()
+
+# ---------------- Read workbook & detect template type ----------------
+try:
+    sheets, meta_str = read_workbook(file)  # dict[str, DataFrame], "Template v1.0 - XYZ" or None
+except Exception as e:
+    st.error(f"Template read failed: {e}")
+    st.stop()
+
+detected_type = detect_template_type(sheets, meta_str)
+tmpl_options = ["PortfolioMaster", "EquityAssetList", "FixedIncomeAssetList"]
+with st.sidebar:
+    tmpl_type = st.selectbox("Template type", options=tmpl_options, index=tmpl_options.index(detected_type))
+
+# ---------------- Safe sheet fetch (no boolean-eval on DataFrames) ----------------
+sheet_name = get_required_sheet_for_type(tmpl_type)
+
+# 1) exact match
+df = sheets.get(sheet_name)
+
+# 2) case-insensitive + allow 'Pastor' alias for PortfolioMaster
+if df is None:
+    for k, v in sheets.items():
+        kl = k.lower()
+        if kl == sheet_name.lower():
+            df = v
+            break
+        if tmpl_type == "PortfolioMaster" and kl == "pastor":
+            df = v
+            break
+
+# hard-missing sheet -> stop
+if df is None:
+    st.error(f"Missing required sheet: '{sheet_name}'.")
+    st.stop()
+
+# allow empty sheet (blank template) but stop gracefully
+if df.shape[0] == 0:
+    st.warning(f"Sheet '{sheet_name}' is present but has 0 rows. "
+               "Download the sample template, add rows, and re-upload.")
+    st.stop()
+
+
+# ---------------- Validation ----------------
+errors = validate_df(df, tmpl_type)
+
+c1, c2 = st.columns([2, 1])
+with c1:
+    st.subheader("Validation")
+    if errors:
+        st.error(f"{len(errors)} validation issue(s) found")
+        st.dataframe(pd.DataFrame(errors))
+    else:
+        st.success("Validation passed")
+with c2:
+    vb = build_validation_report(errors)
+    st.download_button("Download Validation Report", vb, file_name="validation_report.xlsx")
+
+if errors:
+    st.stop()
+
+# ---------------- Transform & Dashboards ----------------
+results = transform_results(df, tmpl_type)
+st.caption(
+    f"Detected: **{detected_type}**  •  Processing as: **{tmpl_type}**  •  Source sheet: **{sheet_name}**"
 )
 
-st.title("📊 Portfolio Health Check")
+if tmpl_type == "PortfolioMaster":
+    tab1, tab2, tab3, tab4 = st.tabs(["Summary", "By Asset Class", "By Sub-Asset", "Currency / Liquidity"])
 
-# -----------------------------
-# File Upload
-# -----------------------------
-upload = st.file_uploader("Upload Portfolio Workbook (.xlsx)", type=["xlsx"])
-if upload:
-    try:
-        xls, df = read_workbook(upload)
-        template_type = detect_template_type(xls)
+    with tab1:
+        m = results["metrics"]
+        cA, cB = st.columns(2)
+        cA.metric("Rows", m["n_rows"])
+        cB.metric("Total USD", f'{m["usd_total_sum"]:,.2f}')
+        st.markdown("**Top assets**")
+        st.dataframe(results["top_assets"])
 
-        st.success(f"Detected template: {template_type}")
-
-        # -----------------------------
-        # Portfolio Master Dashboard
-        # -----------------------------
-        if template_type == "PortfolioMaster":
-            res = transform_results(df, xls)
-            tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-                "Summary", "By Asset Class", "By Sub-Asset",
-                "Policy vs Actual", "Geography", "FX", "Liquidity & ESG"
-            ])
-
-            with tab1:
-                st.subheader("Portfolio Summary")
-                st.dataframe(res["summary"])
-
-            with tab2:
-                st.subheader("By Asset Class")
-                fig = px.pie(res["asset_class"], names="Asset Class", values="USD Total")
-                st.plotly_chart(fig, use_container_width=True)
-
-            with tab3:
-                st.subheader("By Sub-Asset Class")
-                fig = px.pie(res["sub_asset"], names="Sub Asset Class", values="USD Total")
-                st.plotly_chart(fig, use_container_width=True)
-
-            with tab4:
-                st.subheader("Policy vs Actual")
-                fig = px.bar(res["policy_vs_actual"].melt(
-                    id_vars="Asset Class",
-                    value_vars=["Portfolio %", "Policy %"]),
-                    x="Asset Class", y="value", color="variable", barmode="group"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
-            with tab5:
-                st.subheader("Geography")
-                st.plotly_chart(res["choropleth"], use_container_width=True)
-
-            with tab6:
-                st.subheader("FX Exposure")
-                fig = px.bar(res["fx"], x="Currency", y="USD Total")
-                st.plotly_chart(fig, use_container_width=True)
-
-            with tab7:
-                st.subheader("Liquidity, Fees & ESG")
-                st.plotly_chart(res["liquidity"], use_container_width=True)
-                st.plotly_chart(res["fees"], use_container_width=True)
-                st.plotly_chart(res["esg"], use_container_width=True)
-
-        # -----------------------------
-        # Equity Dashboard
-        # -----------------------------
-        if template_type == "EquityAssetList":
-            policy_df = None
-            if "Policy" in xls.sheet_names:
-                policy_df = pd.read_excel(upload, sheet_name="Policy")
-
-            res = transform_equity_results(df, policy_df)
-
-            tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-                "Sector vs Benchmark", "Market Cap", "Style", "Revenue", "Valuation", "Factors"
-            ])
-
-            with tab1:
-                st.subheader("Sector Allocation vs Benchmark")
-                fig0 = px.bar(
-                    res["sector_vs_benchmark"].melt(
-                        id_vars="Sector",
-                        value_vars=["Portfolio Weight %", "Policy Weight %"]
-                    ),
-                    x="Sector", y="value", color="variable", barmode="group"
-                )
-                st.plotly_chart(fig0, use_container_width=True)
-
-            with tab2:
-                st.subheader("Market Cap Distribution")
-                fig1 = px.bar(res["market_cap"], x="Market Cap Bucket", y="Weight %")
-                st.plotly_chart(fig1, use_container_width=True)
-
-            with tab3:
-                st.subheader("Style Box Exposures")
-                fig2 = px.bar(res["style_box"], x="Style", y="Exposure")
-                st.plotly_chart(fig2, use_container_width=True)
-
-            with tab4:
-                st.subheader("Revenue Exposure Heatmap")
-                fig3 = px.treemap(res["revenue_exposure"],
-                                  path=["Revenue Exposure Region"],
-                                  values="Revenue Exposure %")
-                st.plotly_chart(fig3, use_container_width=True)
-
-            with tab5:
-                st.subheader("Valuation Scatter (PE vs EPS Growth)")
-                fig4 = px.scatter(
-                    res["valuation_scatter"],
-                    x="PE", y="EPS Growth fwd12m %",
-                    size="Weight %", hover_name="Security"
-                )
-                st.plotly_chart(fig4, use_container_width=True)
-
-            with tab6:
-                st.subheader("Factor Exposure Spider")
-                fig5 = px.line_polar(
-                    res["factor_spider"], r="Exposure", theta="Style", line_close=True
-                )
-                st.plotly_chart(fig5, use_container_width=True)
-
-        # -----------------------------
-        # Fixed Income Dashboard
-        # -----------------------------
-        if template_type == "FixedIncomeAssetList":
-            st.subheader("Fixed Income dashboard coming soon...")
-
-        # -----------------------------
-        # Export Buttons
-        # -----------------------------
-        st.sidebar.subheader("Exports")
-        excel_bytes = generate_excel_report(df)
-        st.sidebar.download_button(
-            "Download Excel Report", data=excel_bytes,
-            file_name="portfolio_health.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    with tab2:
+        dfv = results["by_asset_class"].copy()
+        total = dfv["USD Total"].sum()
+        dfv["% of Total"] = (dfv["USD Total"] / total) * 100
+    
+        label_mode = st.radio(
+            "Labels", ["Value ($)", "% of total", "Both"],
+            index=2, horizontal=True, key="pm_assetclass_labels"
         )
-
-        pdf_bytes = generate_pdf_report(df)
-        st.sidebar.download_button(
-            "Download PDF Report", data=pdf_bytes,
-            file_name="portfolio_health.pdf", mime="application/pdf"
+    
+        fig = px.pie(
+            dfv,
+            names="Asset Class",
+            values="USD Total",
+            hole=0.25,
+            title="By Asset Class"
         )
+        if label_mode == "Value ($)":
+            fig.update_traces(textinfo="label+value")
+        elif label_mode == "% of total":
+            fig.update_traces(textinfo="label+percent")
+        else:
+            fig.update_traces(textinfo="label+value+percent")
+        fig.update_traces(textposition="inside")
+        st.plotly_chart(fig, use_container_width=True)
+    
+        st.dataframe(dfv[["Asset Class", "USD Total", "% of Total"]])
 
-    except Exception as e:
-        st.error(f"❌ Error: {e}")
+    with tab3:
+        dfv = results["by_sub_asset"].copy()
+        total = dfv["USD Total"].sum()
+        dfv["% of Total"] = (dfv["USD Total"] / total) * 100
+    
+        label_mode = st.radio(
+            "Labels", ["Value ($)", "% of total", "Both"],
+            index=2, horizontal=True, key="pm_subasset_labels"
+        )
+    
+        fig = px.pie(
+            dfv,
+            names="Sub Asset Class",
+            values="USD Total",
+            hole=0.25,
+            title="By Sub-Asset"
+        )
+        if label_mode == "Value ($)":
+            fig.update_traces(textinfo="label+value")
+        elif label_mode == "% of total":
+            fig.update_traces(textinfo="label+percent")
+        else:
+            fig.update_traces(textinfo="label+value+percent")
+        fig.update_traces(textposition="inside")
+        st.plotly_chart(fig, use_container_width=True)
+    
+        st.dataframe(dfv[["Sub Asset Class", "USD Total", "% of Total"]])
+
+    with tab4:
+        st.markdown("**Liquidity**")
+        st.dataframe(results["by_liquidity"])
+        st.markdown("**Currency**")
+        st.dataframe(results["by_fx"])
+
+
+elif tmpl_type == "EquityAssetList":
+    tab1, tab2, tab3, tab4 = st.tabs(["Summary", "By Sector", "By Region", "Top Positions"])
+
+    with tab1:
+        m = results["metrics"]
+        cA, cB, cC = st.columns(3)
+        cA.metric("Positions", m["n_rows"])
+        cB.metric("Market Value (USD)", f'{m["mv_sum"]:,.2f}')
+        cC.metric("Weight % (sum)", f'{m["w_sum"]:.2f}')
+
+    with tab2:
+        dfv = results["by_sector"]
+        fig = px.bar(dfv, x="Sector (GICS)", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(dfv)
+
+    with tab3:
+        dfv = results["by_region"]
+        fig = px.bar(dfv, x="Region", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(dfv)
+
+    with tab4:
+        st.dataframe(results["top_positions"])
+
+
+elif tmpl_type == "FixedIncomeAssetList":
+    tab1, tab2, tab3, tab4 = st.tabs(["Summary", "By Rating", "Maturity Ladder", "Duration Buckets"])
+
+    with tab1:
+        m = results["metrics"]
+        cA, cB, cC, cD = st.columns(4)
+        cA.metric("Bonds", m["n_rows"])
+        cB.metric("Market Value (USD)", f'{m["mv_sum"]:,.2f}')
+        cC.metric("Weight % (sum)", f'{m["w_sum"]:.2f}')
+        cD.metric("Mod. Duration (mv-weighted)", f'{m["dur_wt_avg"]:.2f}')
+
+    with tab2:
+        dfv = results["by_rating"]
+        fig = px.bar(dfv, x="Rating", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(dfv)
+
+    with tab3:
+        dfv = results["maturity_buckets"]
+        fig = px.bar(dfv, x="Bucket", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(dfv)
+
+    with tab4:
+        dfv = results["duration_buckets"]
+        fig = px.bar(dfv, x="Bucket", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(dfv)
+
+# ---------------- Report export ----------------
+xlsx_bytes = build_report_xlsx(results)
+st.download_button("Download report.xlsx", xlsx_bytes, file_name="portfolio_health_report.xlsx")
