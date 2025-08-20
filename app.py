@@ -15,6 +15,12 @@ from processing.pipeline import (
 )
 from processing.reporting import build_report_xlsx, build_validation_report
 
+from processing.pdf_report import build_pdf_report
+import plotly.express as px
+from plot import (
+    pie_asset_class, pie_sub_asset,
+    pie_equity_sector, pie_equity_region, pie_fi_rating
+)
 
 # ---- (Optional) simple password. Delete this block to disable. ----
 if "APP_PASSWORD" in st.secrets:
@@ -231,5 +237,6 @@ elif tmpl_type == "FixedIncomeAssetList":
 # ---------------- Report export ----------------
 xlsx_bytes = build_report_xlsx(results)
 st.download_button("Download report.xlsx", xlsx_bytes, file_name="portfolio_health_report.xlsx")
+
 
 
