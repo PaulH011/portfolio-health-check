@@ -211,6 +211,44 @@ def _read_policy(sheets: Dict[str, pd.DataFrame]):
         except Exception:
             meta = {}
     return policy, meta
+    
+def transform_equity_results(df: pd.DataFrame, policy_df: pd.DataFrame | None = None) -> dict:
+    """Produce summary stats and chart data for Equity template."""
+
+    results = {}
+
+    # Sector allocation (portfolio)
+    sector_alloc = df.groupby("Sector")["Weight %"].sum().reset_index()
+    sector_alloc.rename(columns={"Weight %": "Portfolio Weight %"}, inplace=True)
+
+    if policy_df is not None and "Sector" in policy_df.columns:
+        benchmark = policy_df[["Sector", "Policy Weight %"]].copy()
+        results["sector_vs_benchmark"] = pd.merge(
+            sector_alloc, benchmark, on="Sector", how="outer"
+        ).fillna(0)
+    else:
+        results["sector_vs_benchmark"] = sector_alloc
+
+    results["sector_alloc"] = sector_alloc
+
+    # Market cap buckets
+    results["market_cap"] = df.groupby("Market Cap Bucket")["Weight %"].sum().reset_index()
+
+    # Style exposures
+    style_cols = ["Style Value", "Style Growth", "Style Quality", "Style Momentum", "Style Low Volatility"]
+    results["style_box"] = df[style_cols].mean().reset_index()
+    results["style_box"].columns = ["Style", "Exposure"]
+
+    # Revenue exposure heatmap
+    results["revenue_exposure"] = df.groupby("Revenue Exposure Region")["Revenue Exposure %"].sum().reset_index()
+
+    # Valuation scatter
+    results["valuation_scatter"] = df[["PE", "EPS Growth fwd12m %", "Weight %", "Security"]].dropna()
+
+    # Factor spider
+    results["factor_spider"] = results["style_box"]  # reuse
+
+    return results
 
 
 # ---- main transform ---------------------------------------------------------
@@ -429,3 +467,4 @@ def transform_results(df: pd.DataFrame, tmpl_type: str, *, sheets: Dict[str, pd.
 
     # If we reach here, return empty structure
     return out
+
