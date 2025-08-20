@@ -15,12 +15,6 @@ from processing.pipeline import (
 )
 from processing.reporting import build_report_xlsx, build_validation_report
 
-from processing.pdf_report import build_pdf_report
-import plotly.express as px
-from plot import (
-    pie_asset_class, pie_sub_asset,
-    pie_equity_sector, pie_equity_region, pie_fi_rating
-)
 
 # ---- (Optional) simple password. Delete this block to disable. ----
 if "APP_PASSWORD" in st.secrets:
@@ -105,8 +99,6 @@ st.caption(
     f"Detected: **{detected_type}**  •  Processing as: **{tmpl_type}**  •  Source sheet: **{sheet_name}**"
 )
 
-figs = {}  # collect for PDF
-
 if tmpl_type == "PortfolioMaster":
     tab1, tab2, tab3, tab4 = st.tabs(["Summary", "By Asset Class", "By Sub-Asset", "Currency / Liquidity"])
 
@@ -119,66 +111,97 @@ if tmpl_type == "PortfolioMaster":
         st.dataframe(results["top_assets"])
 
     with tab2:
-        label_mode = st.radio("Labels", ["Value ($)", "% of total", "Both"], index=2,
-                              horizontal=True, key="pm_assetclass_labels")
-        mode = {"Value ($)": "value", "% of total": "%", "Both": "both"}[label_mode]
-        fig, table = pie_asset_class(results, label_mode=mode)
-        st.plotly_chart(fig, use_container_width=True); st.dataframe(table)
-        figs["pm_asset_pie"] = fig
+        dfv = results["by_asset_class"].copy()
+        total = dfv["USD Total"].sum()
+        dfv["% of Total"] = (dfv["USD Total"] / total) * 100
+    
+        label_mode = st.radio(
+            "Labels", ["Value ($)", "% of total", "Both"],
+            index=2, horizontal=True, key="pm_assetclass_labels"
+        )
+    
+        fig = px.pie(
+            dfv,
+            names="Asset Class",
+            values="USD Total",
+            hole=0.25,
+            title="By Asset Class"
+        )
+        if label_mode == "Value ($)":
+            fig.update_traces(textinfo="label+value")
+        elif label_mode == "% of total":
+            fig.update_traces(textinfo="label+percent")
+        else:
+            fig.update_traces(textinfo="label+value+percent")
+        fig.update_traces(textposition="inside")
+        st.plotly_chart(fig, use_container_width=True)
+    
+        st.dataframe(dfv[["Asset Class", "USD Total", "% of Total"]])
 
     with tab3:
-        label_mode = st.radio("Labels", ["Value ($)", "% of total", "Both"], index=2,
-                              horizontal=True, key="pm_subasset_labels")
-        mode = {"Value ($)": "value", "% of total": "%", "Both": "both"}[label_mode]
-        fig, table = pie_sub_asset(results, label_mode=mode)
-        st.plotly_chart(fig, use_container_width=True); st.dataframe(table)
-        figs["pm_subasset_pie"] = fig
+        dfv = results["by_sub_asset"].copy()
+        total = dfv["USD Total"].sum()
+        dfv["% of Total"] = (dfv["USD Total"] / total) * 100
+    
+        label_mode = st.radio(
+            "Labels", ["Value ($)", "% of total", "Both"],
+            index=2, horizontal=True, key="pm_subasset_labels"
+        )
+    
+        fig = px.pie(
+            dfv,
+            names="Sub Asset Class",
+            values="USD Total",
+            hole=0.25,
+            title="By Sub-Asset"
+        )
+        if label_mode == "Value ($)":
+            fig.update_traces(textinfo="label+value")
+        elif label_mode == "% of total":
+            fig.update_traces(textinfo="label+percent")
+        else:
+            fig.update_traces(textinfo="label+value+percent")
+        fig.update_traces(textposition="inside")
+        st.plotly_chart(fig, use_container_width=True)
+    
+        st.dataframe(dfv[["Sub Asset Class", "USD Total", "% of Total"]])
 
     with tab4:
-        fx = results["by_fx"]; liq = results["by_liquidity"]
-        st.markdown("**Currency**")
-        fig_fx = px.bar(fx, x="FX", y="USD Total", text="USD Total")
-        st.plotly_chart(fig_fx, use_container_width=True); st.dataframe(fx)
         st.markdown("**Liquidity**")
-        fig_lq = px.bar(liq, x="Liquid/Illiquid", y="USD Total", text="USD Total")
-        st.plotly_chart(fig_lq, use_container_width=True); st.dataframe(liq)
-        figs["pm_currency_bar"] = fig_fx
-        figs["pm_liquidity_bar"] = fig_lq
+        st.dataframe(results["by_liquidity"])
+        st.markdown("**Currency**")
+        st.dataframe(results["by_fx"])
 
 
 elif tmpl_type == "EquityAssetList":
-    figs = {}
     tab1, tab2, tab3, tab4 = st.tabs(["Summary", "By Sector", "By Region", "Top Positions"])
+
     with tab1:
         m = results["metrics"]
         cA, cB, cC = st.columns(3)
         cA.metric("Positions", m["n_rows"])
         cB.metric("Market Value (USD)", f'{m["mv_sum"]:,.2f}')
         cC.metric("Weight % (sum)", f'{m["w_sum"]:.2f}')
+
     with tab2:
-        label_mode = st.radio("Labels", ["Value ($)", "% of total", "Both"], index=2,
-                              horizontal=True, key="eq_sector_labels")
-        mode = {"Value ($)": "value", "% of total": "%", "Both": "both"}[label_mode]
-        fig, table = pie_equity_sector(results, label_mode=mode)
-        st.plotly_chart(fig, use_container_width=True); st.dataframe(table)
-        figs["eq_sector_pie"] = fig
+        dfv = results["by_sector"]
+        fig = px.bar(dfv, x="Sector (GICS)", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(dfv)
+
     with tab3:
-        label_mode = st.radio("Labels", ["Value ($)", "% of total", "Both"], index=2,
-                              horizontal=True, key="eq_region_labels")
-        mode = {"Value ($)": "value", "% of total": "%", "Both": "both"}[label_mode]
-        fig, table = pie_equity_region(results, label_mode=mode)
-        st.plotly_chart(fig, use_container_width=True); st.dataframe(table)
-        figs["eq_region_pie"] = fig
+        dfv = results["by_region"]
+        fig = px.bar(dfv, x="Region", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(dfv)
+
     with tab4:
-        top = results["top_positions"].copy()
-        fig_top = px.bar(top.head(15), x="Asset (Security Name)", y="Market Value (USD)", text="Market Value (USD)")
-        fig_top.update_layout(xaxis_tickangle=-35)
-        st.plotly_chart(fig_top, use_container_width=True); st.dataframe(top)
-        figs["eq_top_bar"] = fig_top
+        st.dataframe(results["top_positions"])
+
 
 elif tmpl_type == "FixedIncomeAssetList":
-    figs = {}
     tab1, tab2, tab3, tab4 = st.tabs(["Summary", "By Rating", "Maturity Ladder", "Duration Buckets"])
+
     with tab1:
         m = results["metrics"]
         cA, cB, cC, cD = st.columns(4)
@@ -186,31 +209,26 @@ elif tmpl_type == "FixedIncomeAssetList":
         cB.metric("Market Value (USD)", f'{m["mv_sum"]:,.2f}')
         cC.metric("Weight % (sum)", f'{m["w_sum"]:.2f}')
         cD.metric("Mod. Duration (mv-weighted)", f'{m["dur_wt_avg"]:.2f}')
+
     with tab2:
-        label_mode = st.radio("Labels", ["Value ($)", "% of total", "Both"], index=2,
-                              horizontal=True, key="fi_rating_labels")
-        mode = {"Value ($)": "value", "% of total": "%", "Both": "both"}[label_mode]
-        fig, table = pie_fi_rating(results, label_mode=mode)
-        st.plotly_chart(fig, use_container_width=True); st.dataframe(table)
-        figs["fi_rating_pie"] = fig
+        dfv = results["by_rating"]
+        fig = px.bar(dfv, x="Rating", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(dfv)
+
     with tab3:
-        mat = results["maturity_buckets"]
-        fig_mat = px.bar(mat, x="Bucket", y="Weight %", text="Weight %", title="Maturity Ladder")
-        st.plotly_chart(fig_mat, use_container_width=True); st.dataframe(mat)
-        figs["fi_maturity_bar"] = fig_mat
+        dfv = results["maturity_buckets"]
+        fig = px.bar(dfv, x="Bucket", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(dfv)
+
     with tab4:
-        dur = results["duration_buckets"]
-        fig_dur = px.bar(dur, x="Bucket", y="Weight %", text="Weight %", title="Duration Buckets")
-        st.plotly_chart(fig_dur, use_container_width=True); st.dataframe(dur)
-        figs["fi_duration_bar"] = fig_dur
+        dfv = results["duration_buckets"]
+        fig = px.bar(dfv, x="Bucket", y="Weight %", text="Weight %")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(dfv)
 
 # ---------------- Report export ----------------
 xlsx_bytes = build_report_xlsx(results)
 st.download_button("Download report.xlsx", xlsx_bytes, file_name="portfolio_health_report.xlsx")
-
-# ---- PDF download (works for all templates)
-pdf_bytes = build_pdf_report(tmpl_type, results, figs, logo_path="assets/parkview_logo.png")
-st.download_button("Download PDF report", pdf_bytes, file_name="portfolio_health_report.pdf", mime="application/pdf")
-
-
 
